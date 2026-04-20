@@ -19,7 +19,7 @@ public abstract class AggregateRoot : Entity
 
 	private readonly List<DomainEvent> _domainEvents = [];
 	/// <summary>
-	/// List that holds Domain Events for this entity instance 
+	/// List that holds Domain Events for this entity instance
 	/// </summary>
 	public IReadOnlyList<DomainEvent> DomainEvents => _domainEvents;
 
@@ -33,7 +33,7 @@ public abstract class AggregateRoot : Entity
 	/// </param>
 	protected void AddDomainEvent(DomainEvent eventItem, bool unique = false)
 	{
-		if (unique && _domainEvents.Any(x => x.GetType() == eventItem.GetType()))
+		if (unique && DomainEvents.Any(x => x.GetType() == eventItem.GetType()))
 			return;
 
 		_domainEvents.Add(eventItem);

@@ -2,9 +2,6 @@
 using MediatR;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
-#if (auth)
-using Monaco.Template.Backend.Api.Auth;
-#endif
 using Monaco.Template.Backend.Api.DTOs;
 using Monaco.Template.Backend.Api.DTOs.Extensions;
 using Monaco.Template.Backend.Application.Features.Product;
@@ -12,96 +9,115 @@ using Monaco.Template.Backend.Application.Features.Product.DTOs;
 using Monaco.Template.Backend.Common.Api.Application;
 using Monaco.Template.Backend.Common.Api.MinimalApi;
 using Monaco.Template.Backend.Common.Domain.Model;
+#if (auth)
+using Monaco.Template.Backend.Api.Auth;
+#endif
 
 namespace Monaco.Template.Backend.Api.Endpoints;
 
 internal static class Products
 {
-	public static IEndpointRouteBuilder AddProducts(this IEndpointRouteBuilder builder, ApiVersionSet versionSet)
+	extension(IEndpointRouteBuilder builder)
 	{
-		var products = builder.CreateApiGroupBuilder(versionSet, "Products");
+		public IEndpointRouteBuilder AddProducts(ApiVersionSet versionSet)
+		{
+			var products = builder.CreateApiGroupBuilder(versionSet,
+														 "Products");
 
-		products.MapGet("",
-						Task<Results<Ok<Page<ProductDto>>, NotFound>> ([FromServices] ISender sender,
-																	   HttpRequest request) =>
-							sender.ExecuteQueryAsync(new GetProductPage.Query(request.Query)),
-						"GetProducts",
+			products.MapGet("",
+							Task<Results<Ok<Page<ProductDto>>, NotFound>> ([FromServices] ISender sender,
+																		   HttpRequest request,
+																		   CancellationToken cancellationToken) =>
+								sender.ExecuteQueryAsync(new GetProductPage.Query(request.Query),
+														 cancellationToken),
+							"GetProducts",
 #if (!auth)
-						"Gets a page of products");
+							"Gets a page of products");
 #else
-						"Gets a page of products")
-				.AllowAnonymous();
+							"Gets a page of products")
+					.AllowAnonymous();
 #endif
 
-		products.MapGet("{id:guid}",
-						Task<Results<Ok<ProductDto?>, NotFound>> ([FromServices] ISender sender,
-																  [FromRoute] Guid id) =>
-							sender.ExecuteQueryAsync(new GetProductById.Query(id)),
-						"GetProduct",
+			products.MapGet("{id:guid}",
+							Task<Results<Ok<ProductDto?>, NotFound>> ([FromServices] ISender sender,
+																	  [FromRoute] Guid id,
+																	  CancellationToken cancellationToken) =>
+								sender.ExecuteQueryAsync(new GetProductById.Query(id),
+														 cancellationToken),
+							"GetProduct",
 #if (!auth)
-						"Gets a product by Id");
+							"Gets a product by Id");
 #else
-						"Gets a product by Id")
-				.AllowAnonymous();
+							"Gets a product by Id")
+					.AllowAnonymous();
 #endif
 
-		products.MapPost("",
-						 Task<Results<Created<Guid>, NotFound, ValidationProblem>> ([FromServices] ISender sender,
-																					[FromBody] ProductCreateEditDto dto,
-																					HttpContext context) =>
-							 sender.ExecuteCommandAsync(dto.Map(),
-														"api/v{0}/Products/{1}",
-														context.GetRequestedApiVersion()!),
-						 "CreateProduct",
+			products.MapPost("",
+							 Task<Results<Created<CreatedResponse>, NotFound, ValidationProblem, Conflict>> ([FromServices] ISender sender,
+																											 [FromBody] ProductCreateEditDto dto,
+																											 HttpContext context,
+																											 CancellationToken cancellationToken) =>
+								 sender.ExecuteCommandCreatedAsync(dto.Map(),
+																   "api/v{0}/Products/{1}",
+																   [context.GetRequestedApiVersion()!],
+																   cancellationToken),
+							 "CreateProduct",
 #if (!auth)
-						 "Create a new product");
+							 "Create a new product");
 #else
-						 "Create a new product")
-				.RequireAuthorization(Scopes.ProductsWrite);
+							 "Create a new product")
+					.RequireAuthorization(Scopes.ProductsWrite);
 #endif
 
-		products.MapPut("{id:guid}",
-						Task<Results<NoContent, NotFound, ValidationProblem>> ([FromServices] ISender sender,
-																			   [FromRoute] Guid id,
-																			   [FromBody] ProductCreateEditDto dto) =>
-							sender.ExecuteCommandEditAsync(dto.Map(id)),
-						"EditProduct",
+			products.MapPut("{id:guid}",
+							Task<Results<NoContent, NotFound, ValidationProblem, Conflict>> ([FromServices] ISender sender,
+																							 [FromRoute] Guid id,
+																							 [FromBody] ProductCreateEditDto dto,
+																							 CancellationToken cancellationToken) =>
+								sender.ExecuteCommandNoContentAsync(dto.Map(id),
+																	cancellationToken),
+							"EditProduct",
 #if (!auth)
-						"Edit an existing product by Id");
+							"Edit an existing product by Id");
 #else
-						"Edit an existing product by Id")
-				.RequireAuthorization(Scopes.ProductsWrite);
+							"Edit an existing product by Id")
+					.RequireAuthorization(Scopes.ProductsWrite);
 #endif
 
-		products.MapDelete("{id:guid}",
-						   Task<Results<Ok, NotFound, ValidationProblem>> ([FromServices] ISender sender,
-																		   [FromRoute] Guid id) =>
-							   sender.ExecuteCommandDeleteAsync(new DeleteProduct.Command(id)),
-						   "DeleteProduct",
+			products.MapDelete("{id:guid}",
+							   Task<Results<Ok, NotFound, ValidationProblem, Conflict>> ([FromServices] ISender sender,
+																						 [FromRoute] Guid id,
+																						 CancellationToken cancellationToken) =>
+								   sender.ExecuteCommandOkAsync(new DeleteProduct.Command(id),
+																cancellationToken),
+							   "DeleteProduct",
 #if (!auth)
-						   "Delete an existing product by Id");
+							   "Delete an existing product by Id");
 #else
-						   "Delete an existing product by Id")
-				.RequireAuthorization(Scopes.ProductsWrite);
+							   "Delete an existing product by Id")
+					.RequireAuthorization(Scopes.ProductsWrite);
 #endif
 
-		products.MapGet("{productId:guid}/Pictures/{pictureId:guid}",
-						Task<Results<FileStreamHttpResult, NotFound>> ([FromServices] ISender sender,
-																	   [FromRoute] Guid productId,
-																	   [FromRoute] Guid pictureId,
-																	   HttpRequest request) =>
-							sender.ExecuteFileDownloadAsync(new DownloadProductPicture.Query(productId,
-																							 pictureId,
-																							 request.Query)),
-						"DownloadProductPicture",
-						"Download a picture from a product by Id")
+			products.MapGet("{productId:guid}/Pictures/{pictureId:guid}",
+							Task<Results<FileStreamHttpResult, NotFound>> ([FromServices] ISender sender,
+																		   [FromRoute] Guid productId,
+																		   [FromRoute] Guid pictureId,
+																		   HttpRequest request,
+																		   CancellationToken cancellationToken) =>
+								sender.ExecuteFileDownloadAsync(new DownloadProductPicture.Query(productId,
+																								 pictureId,
+																								 request.Query),
+																cancellationToken),
+							"DownloadProductPicture",
+							"Download a picture from a product by Id")
 #if (!auth)
-				.Produces(StatusCodes.Status200OK);
+					.Produces(StatusCodes.Status200OK);
 #else
-				.Produces(StatusCodes.Status200OK)
-				.AllowAnonymous();
+					.Produces(StatusCodes.Status200OK)
+					.AllowAnonymous();
 #endif
 
-		return builder;
+			return builder;
+		}
 	}
 }

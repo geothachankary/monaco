@@ -1,14 +1,12 @@
 ﻿using AutoFixture.Xunit2;
-using Azure.Storage.Blobs;
-using Dasync.Collections;
 using AwesomeAssertions;
+using Azure.Storage.Blobs;
 using Flurl.Http;
 using Microsoft.EntityFrameworkCore;
 using Monaco.Template.Backend.Api.DTOs;
-using Monaco.Template.Backend.Common.Domain.Model;
-using System.Diagnostics.CodeAnalysis;
-using System.Net;
 using Monaco.Template.Backend.Application.Features.Product.DTOs;
+using Monaco.Template.Backend.Common.Api.Application;
+using Monaco.Template.Backend.Common.Domain.Model;
 using Monaco.Template.Backend.Domain.Model.Entities;
 #if (massTransitIntegration && (apiService || workerService))
 using Monaco.Template.Backend.Messages.V1;
@@ -16,30 +14,34 @@ using Monaco.Template.Backend.Messages.V1;
 #if (massTransitIntegration || workerService)
 using Monaco.Template.Backend.Worker.Consumers;
 #endif
+using System.Diagnostics.CodeAnalysis;
+using System.Net;
+using MassTransit.Testing;
+using Monaco.Template.Backend.IntegrationTests.Factories;
 using File = System.IO.File;
 
 namespace Monaco.Template.Backend.IntegrationTests.Tests;
 
 [ExcludeFromCodeCoverage]
+[Collection("IntegrationTests")]
 [Trait("Integration Tests", "Products")]
 public class ProductsTests : IntegrationTest
 {
 	public ProductsTests(AppFixture fixture) : base(fixture)
 	{ }
 
-#if (auth)
+#if (apiService && auth)
 	protected override bool RequiresAuthentication => true;
-#else
-	protected override bool RequiresAuthentication => false;
 #endif
 
 	public override async Task InitializeAsync()
 	{
 		await base.InitializeAsync();
 		await RunScriptAsync(@"Scripts\Products.sql");
-		var images = await GetDbContext().Set<Image>()
-										 .AsNoTracking()
-										 .ToListAsync();
+		var images = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								  .Set<Image>()
+								  .AsNoTracking()
+								  .ToListAsync();
 
 		var blobContainerClient = GetBlobContainerClient();
 		foreach (var image in images)
@@ -55,8 +57,7 @@ public class ProductsTests : IntegrationTest
 #endif
 
 	private BlobContainerClient GetBlobContainerClient() =>
-		new(Fixture.StorageConnectionString,
-			AppFixture.StorageContainer);
+		new(Fixture.StorageConnectionString, AppFixture.StorageContainer);
 
 	[Theory(DisplayName = "Get Products page succeeds")]
 	[InlineData(false, false, false, null, null, 3)]
@@ -68,11 +69,13 @@ public class ProductsTests : IntegrationTest
 											  int? limit,
 											  int expectedItemsCount)
 	{
-		var response = await CreateRequest(ApiRoutes.Products.Query(expandCompany,
-																	expandPictures,
-																	expandDefaultPicture,
-																	offset,
-																	limit)).GetAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Products.Query(expandCompany,
+																	 expandPictures,
+																	 expandDefaultPicture,
+																	 offset,
+																	 limit))
+								   .GetAsync();
 
 		response.StatusCode
 				.Should()
@@ -136,19 +139,22 @@ public class ProductsTests : IntegrationTest
 	{
 		var productId = Guid.Parse("FA934D1C-1E6D-4DD4-ADC2-08DC18C8810C");
 
-		var response = await CreateRequest(ApiRoutes.Products.Get(productId)).GetAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Products.Get(productId))
+								   .GetAsync();
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
 		var result = await response.GetJsonAsync<ProductDto>();
-		var product = await GetDbContext().Set<Product>()
-										  .Include(x => x.Company)
-										  .Include(x => x.DefaultPicture)
-										  .Include(x => x.Pictures)
-										  .ThenInclude(x => x.Thumbnail)
-										  .SingleAsync(c => c.Id == productId);
+		var product = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Product>()
+								   .Include(x => x.Company)
+								   .Include(x => x.DefaultPicture)
+								   .Include(x => x.Pictures)
+								   .ThenInclude(x => x.Thumbnail)
+								   .SingleAsync(c => c.Id == productId);
 
 		result.Should()
 			  .NotBeNull();
@@ -224,19 +230,22 @@ public class ProductsTests : IntegrationTest
 		await DownloadProductPictureTest(productId, pictureId, true);
 	}
 
-	private async Task DownloadProductPictureTest(Guid productId, 
+	private async Task DownloadProductPictureTest(Guid productId,
 												  Guid pictureId,
 												  bool? isThumbnail = null)
 	{
-		var response = await CreateRequest(ApiRoutes.Products.DownloadPicture(productId,
-																			  pictureId,
-																			  isThumbnail)).GetAsync();
-		
-		var picture = await GetDbContext().Set<Image>()
-										  .AsNoTracking()
-										  .Where(x => x.Id == pictureId)
-										  .Select(x => isThumbnail.HasValue && isThumbnail.Value ? x.Thumbnail! : x)
-										  .SingleAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Products.DownloadPicture(productId,
+																			   pictureId,
+																			   isThumbnail))
+								   .GetAsync();
+
+		var picture = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Image>()
+								   .AsNoTracking()
+								   .Where(x => x.Id == pictureId)
+								   .Select(x => isThumbnail.HasValue && isThumbnail.Value ? x.Thumbnail! : x)
+								   .SingleAsync();
 
 		response.StatusCode
 				.Should()
@@ -258,17 +267,21 @@ public class ProductsTests : IntegrationTest
 											   string description,
 											   decimal price)
 	{
+		var webAppFactory = Fixture.WebAppFactory.GetCustomFactory(b => b.AddMassTransitTestHarnessForWebApp());
+		var workerServiceFactory = Fixture.WorkerServiceFactory.GetCustomFactory(b => b.AddMassTransitTestHarnessForWorker());
+
+		using var client = GetClient(webAppFactory);
 #if (auth)
 		await SetupAccessToken();
 #endif
 #if (apiService && massTransitIntegration)
-		var apiTestHarness = GetApiTestHarness();
+		var apiTestHarness = webAppFactory.Services.GetTestHarness();
 #endif
 #if (workerService && massTransitIntegration)
-		var serviceTestHarness = GetServiceTestHarness();
+		var serviceTestHarness = workerServiceFactory.Services.GetTestHarness();
 #endif
 
-		var dbContext = GetDbContext();
+		var dbContext = Fixture.GetDbContext(webAppFactory.Services);
 		var tempImages = await dbContext.Set<Image>()
 										.Where(i => i.IsTemp && i.ThumbnailId.HasValue)
 										.ToListAsync();
@@ -281,36 +294,39 @@ public class ProductsTests : IntegrationTest
 										   [.. tempImages.Select(i => i.Id)],
 										   tempImages.Last().Id);
 
-		var response = await CreateRequest(ApiRoutes.Products.Post()).PostJsonAsync(dto);
+		var response = await client.Request(ApiRoutes.Products.Post()).PostJsonAsync(dto);
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.Created);
 
-		var result = await response.GetStringAsync();
+		var result = await response.GetJsonAsync<CreatedResponse>();
 
-		var id = Guid.Empty;
 		result.Should()
-			  .Match(value => Guid.TryParse(value.Replace("\"", ""), out id));
+			  .NotBeNull();
+		result.Id
+			  .Should()
+			  .NotBeEmpty();
 		response.Headers
 				.Should()
-				.Contain(("Location", ApiRoutes.Products.Get(id).ToString()));
+				.Contain(("Location", ApiRoutes.Products.Get(result.Id).ToString()));
 
-		var products = await GetDbContext().Set<Product>()
-											.Include(x => x.Company)
-											.Include(x => x.Pictures)
-											.ThenInclude(x => x.Thumbnail)
-											.Include(x => x.DefaultPicture)
-											.ToListAsync();
+		var products = await Fixture.GetDbContext(webAppFactory.Services)
+									.Set<Product>()
+									.Include(x => x.Company)
+									.Include(x => x.Pictures)
+									.ThenInclude(x => x.Thumbnail)
+									.Include(x => x.DefaultPicture)
+									.ToListAsync();
 		products.Should()
-				 .HaveCount(4);
+				.HaveCount(4);
 
-		var newProduct = products.SingleOrDefault(c => c.Id == id);
+		var newProduct = products.SingleOrDefault(c => c.Id == result.Id);
 		newProduct.Should()
 				  .NotBeNull();
-		newProduct!.Title
-				   .Should()
-				   .Be(dto.Title);
+		newProduct.Title
+				  .Should()
+				  .Be(dto.Title);
 		newProduct.Description
 				  .Should()
 				  .Be(dto.Description);
@@ -326,7 +342,7 @@ public class ProductsTests : IntegrationTest
 							  {
 								  i.Should()
 								   .BeOneOf(tempImages);
-								  
+
 								  i.IsTemp
 								   .Should()
 								   .BeFalse();
@@ -342,18 +358,25 @@ public class ProductsTests : IntegrationTest
 #if (massTransitIntegration)
 #if (apiService)
 
-		(await apiTestHarness.Published.Any<ProductCreated>())
-			.Should()
-			.BeTrue();
+		var message = await apiTestHarness.Published
+										  .SelectAsync<ProductCreated>()
+										  .SingleOrDefaultAsync(x => x.Context.Message.Id == result.Id,
+																CancellationToken.None);
+
+		message.Should().NotBeNull();
+
+		var (msgId, msgTitle, msgDescription, msgPrice, msgCompanyId) = message.Context.Message;
+
+		msgId.Should().Be(result.Id);
+		msgTitle.Should().Be(dto.Title);
+		msgDescription.Should().Be(dto.Description);
+		msgCompanyId.Should().Be(dto.CompanyId);
+		msgPrice.Should().Be(dto.Price);
 #endif
 #if (workerService)
 
-		(await serviceTestHarness.Consumed.Any<ProductCreated>())
-			.Should()
-			.BeTrue();
-
 		var consumerHarness = serviceTestHarness.GetConsumerHarness<OnProductCreatedThenLongRunningProcess>();
-		(await consumerHarness.Consumed.Any<ProductCreated>())
+		(await consumerHarness.Consumed.SelectAsync<ProductCreated>().AnyAsync(c => c.Context.Message.Id == result.Id))
 			.Should()
 			.BeTrue();
 #endif
@@ -369,7 +392,7 @@ public class ProductsTests : IntegrationTest
 #if (auth)
 		await SetupAccessToken();
 #endif
-		var dbContext = GetDbContext();
+		var dbContext = Fixture.GetDbContext(Fixture.WebAppFactory.Services);
 		var productId = Guid.Parse("FA934D1C-1E6D-4DD4-ADC2-08DC18C8810C");
 		var productPictures = await dbContext.Set<Product>()
 											 .AsNoTracking()
@@ -388,16 +411,19 @@ public class ProductsTests : IntegrationTest
 										   [.. productPictures],
 										   newPictureId);
 
-		var response = await CreateRequest(ApiRoutes.Products.Put(productId)).PutJsonAsync(dto);
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Products.Put(productId))
+								   .PutJsonAsync(dto);
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.NoContent);
 
-		var product = await GetDbContext().Set<Product>()
-										  .Include(x => x.Pictures)
-										  .Include(x => x.DefaultPicture)
-										  .SingleOrDefaultAsync(c => c.Id == productId);
+		var product = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Product>()
+								   .Include(x => x.Pictures)
+								   .Include(x => x.DefaultPicture)
+								   .SingleOrDefaultAsync(c => c.Id == productId);
 		product.Should()
 			   .NotBeNull();
 		product!.Title
@@ -451,7 +477,6 @@ public class ProductsTests : IntegrationTest
 								.Should()
 								.NotBeNull();
 						   });
-
 	}
 
 	[Fact(DisplayName = "Delete existing Product succeeds")]
@@ -461,17 +486,20 @@ public class ProductsTests : IntegrationTest
 		await SetupAccessToken();
 #endif
 		var productId = Guid.Parse("FA934D1C-1E6D-4DD4-ADC2-08DC18C8810C");
-		var response = await CreateRequest(ApiRoutes.Products.Delete(productId)).DeleteAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Products.Delete(productId))
+								   .DeleteAsync();
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
-		var products = await GetDbContext().Set<Product>()
-											.ToListAsync();
+		var products = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+									.Set<Product>()
+									.ToListAsync();
 
 		products.Should()
-				 .HaveCount(2);
+				.HaveCount(2);
 		products.Should()
 				.NotContain(x => x.Id == productId);
 	}
@@ -479,8 +507,8 @@ public class ProductsTests : IntegrationTest
 	public override async Task DisposeAsync()
 	{
 		var container = GetBlobContainerClient();
-		await container.GetBlobs()
-					   .ParallelForEachAsync(blob => container.DeleteBlobAsync(blob.Name));
+		await Parallel.ForEachAsync(container.GetBlobs(),
+									async (blob, ct) => await container.DeleteBlobAsync(blob.Name, cancellationToken: ct));
 
 		await base.DisposeAsync();
 	}

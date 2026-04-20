@@ -9,7 +9,7 @@ internal sealed class ProductEntityConfiguration : IEntityTypeConfiguration<Prod
 {
 	public void Configure(EntityTypeBuilder<Product> builder)
 	{
-		builder.ConfigureIdWithDbGeneratedValue();
+		builder.ConfigureIdWithValueGeneratedNever();
 
 		builder.Property(x => x.Title)
 			   .IsRequired()
@@ -22,6 +22,9 @@ internal sealed class ProductEntityConfiguration : IEntityTypeConfiguration<Prod
 		builder.Property(x => x.Price)
 			   .IsRequired()
 			   .HasPrecision(10, 2);
+
+		builder.Property(x => x.Version)
+			   .IsRowVersion();
 
 
 		builder.HasOne(x => x.DefaultPicture)
@@ -39,7 +42,7 @@ internal sealed class ProductEntityConfiguration : IEntityTypeConfiguration<Prod
 															  .WithMany()
 															  .OnDelete(DeleteBehavior.ClientCascade))
 			   .HasIndex($"{nameof(Product.Pictures)}Id")
-			   .IsUnique();     //Constraint for single usage of file
+			   .IsUnique();     // Constraint for single usage of file
 
 		builder.HasIndex(x => x.Title)
 			   .IsUnique(false);

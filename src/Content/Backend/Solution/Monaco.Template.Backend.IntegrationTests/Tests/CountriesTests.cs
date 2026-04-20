@@ -9,16 +9,15 @@ using System.Net;
 namespace Monaco.Template.Backend.IntegrationTests.Tests;
 
 [ExcludeFromCodeCoverage]
+[Collection("IntegrationTests")]
 [Trait("Integration Tests", "Countries")]
 public class CountriesTests : IntegrationTest
 {
 	public CountriesTests(AppFixture fixture) : base(fixture)
 	{ }
 
-#if (auth)
+#if (apiService && auth)
 	protected override bool RequiresAuthentication => true;
-#else
-	protected override bool RequiresAuthentication => false;
 #endif
 
 	public override async Task InitializeAsync()
@@ -33,15 +32,18 @@ public class CountriesTests : IntegrationTest
 	[Fact(DisplayName = "Get Countries succeeds")]
 	public async Task GetCountriesSucceeds()
 	{
-		var response = await CreateRequest(ApiRoutes.Countries.Query()).GetAsync();
-		
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Countries.Query())
+								   .GetAsync();
+
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
 		var result = await response.GetJsonAsync<CountryDto[]>();
-		var countriesCount = await GetDbContext().Set<Country>()
-												 .CountAsync();
+		var countriesCount = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+										  .Set<Country>()
+										  .CountAsync();
 
 		result.Should()
 			  .NotBeNull();
@@ -54,15 +56,18 @@ public class CountriesTests : IntegrationTest
 	{
 		var countryId = Guid.Parse("534A826B-70EF-2128-1A4C-52E23B7D5447");
 
-		var response = await CreateRequest(ApiRoutes.Countries.Get(countryId)).GetAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Countries.Get(countryId))
+								   .GetAsync();
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
 		var result = await response.GetJsonAsync<CountryDto>();
-		var country = await GetDbContext().Set<Country>()
-										  .SingleAsync(c => c.Id == countryId);
+		var country = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Country>()
+								   .SingleAsync(c => c.Id == countryId);
 
 		result.Should()
 			  .NotBeNull();

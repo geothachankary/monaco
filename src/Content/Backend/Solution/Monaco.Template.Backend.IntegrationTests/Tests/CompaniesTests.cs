@@ -4,6 +4,7 @@ using Flurl.Http;
 using Microsoft.EntityFrameworkCore;
 using Monaco.Template.Backend.Api.DTOs;
 using Monaco.Template.Backend.Application.Features.Company.DTOs;
+using Monaco.Template.Backend.Common.Api.Application;
 using Monaco.Template.Backend.Common.Domain.Model;
 using Monaco.Template.Backend.Domain.Model.Entities;
 using Monaco.Template.Backend.Domain.Model.ValueObjects;
@@ -14,16 +15,15 @@ using System.Net.Mail;
 namespace Monaco.Template.Backend.IntegrationTests.Tests;
 
 [ExcludeFromCodeCoverage]
+[Collection("IntegrationTests")]
 [Trait("Integration Tests", "Companies")]
 public class CompaniesTests : IntegrationTest
 {
 	public CompaniesTests(AppFixture fixture) : base(fixture)
 	{ }
 
-#if (auth)
+#if (apiService && auth)
 	protected override bool RequiresAuthentication => true;
-#else
-	protected override bool RequiresAuthentication => false;
 #endif
 
 	public override async Task InitializeAsync()
@@ -44,8 +44,10 @@ public class CompaniesTests : IntegrationTest
 											   int? limit,
 											   int expectedItemsCount)
 	{
-		var response = await CreateRequest(ApiRoutes.Companies.Query(expandCountry, offset, limit)).GetAsync();
-		
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Companies.Query(expandCountry, offset, limit))
+								   .GetAsync();
+
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
@@ -82,15 +84,18 @@ public class CompaniesTests : IntegrationTest
 	{
 		var companyId = Guid.Parse("8CEFE8FA-F747-4A3A-D8C9-08DC18C76CDC");
 
-		var response = await CreateRequest(ApiRoutes.Companies.Get(companyId)).GetAsync();
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Companies.Get(companyId))
+								   .GetAsync();
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
 		var result = await response.GetJsonAsync<CompanyDto>();
-		var company = await GetDbContext().Set<Company>()
-										  .SingleAsync(c => c.Id == companyId);
+		var company = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Company>()
+								   .SingleAsync(c => c.Id == companyId);
 
 		result.Should()
 			  .NotBeNull();
@@ -139,27 +144,33 @@ public class CompaniesTests : IntegrationTest
 										   county,
 										   postCode[..Address.PostCodeLength],
 										   spainId);
-		var response = await CreateRequest(ApiRoutes.Companies.Post()).PostJsonAsync(dto);
+
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Companies.Post())
+								   .PostJsonAsync(dto);
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.Created);
 
-		var result = await response.GetStringAsync();
+		var result = await response.GetJsonAsync<CreatedResponse>();
 
-		var id = Guid.Empty;
 		result.Should()
-			  .Match(value => Guid.TryParse(value.Replace("\"", ""), out id));
+			  .NotBeNull();
+		result.Id
+			  .Should()
+			  .NotBeEmpty();
 		response.Headers
 				.Should()
-				.Contain(("Location", ApiRoutes.Companies.Get(id).ToString()));
-		
-		var companies = await GetDbContext().Set<Company>()
-											.ToListAsync();
+				.Contain(("Location", ApiRoutes.Companies.Get(result.Id).ToString()));
+
+		var companies = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+									 .Set<Company>()
+									 .ToListAsync();
 		companies.Should()
 				 .HaveCount(4);
 
-		var newCompany = companies.SingleOrDefault(c => c.Id == id);
+		var newCompany = companies.SingleOrDefault(c => c.Id == result.Id);
 		newCompany.Should()
 				  .NotBeNull();
 		newCompany!.Name
@@ -208,14 +219,18 @@ public class CompaniesTests : IntegrationTest
 										   county,
 										   postCode[..Address.PostCodeLength],
 										   countryId);
-		var response = await CreateRequest(ApiRoutes.Companies.Put(companyId)).PutJsonAsync(dto);
+
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Companies.Put(companyId))
+								   .PutJsonAsync(dto);
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.NoContent);
 
-		var company = await GetDbContext().Set<Company>()
-										  .SingleOrDefaultAsync(c => c.Id == companyId);
+		var company = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+								   .Set<Company>()
+								   .SingleOrDefaultAsync(c => c.Id == companyId);
 		company.Should()
 			   .NotBeNull();
 		company!.Name
@@ -248,14 +263,18 @@ public class CompaniesTests : IntegrationTest
 	public async Task DeleteExistingCompanySucceeds()
 	{
 		var companyId = Guid.Parse("EDEDB1E8-FD3A-4579-9EF8-A0BBEF2A6F95");
-		var response = await CreateRequest(ApiRoutes.Companies.Delete(companyId)).DeleteAsync();
+
+		using var client = GetClient(Fixture.WebAppFactory);
+		var response = await client.Request(ApiRoutes.Companies.Delete(companyId))
+								   .DeleteAsync();
 
 		response.StatusCode
 				.Should()
 				.Be((int)HttpStatusCode.OK);
 
-		var companies = await GetDbContext().Set<Company>()
-											.ToListAsync();
+		var companies = await Fixture.GetDbContext(Fixture.WebAppFactory.Services)
+									 .Set<Company>()
+									 .ToListAsync();
 		companies.Should()
 				 .HaveCount(2);
 		companies.Should()
